@@ -1,0 +1,46 @@
+[
+  {
+    "id": "69qo5i37ambdn9g3n",
+    "userId": "ett2iz4u7mbdmjz77",
+    "name": "test mail",
+    "subject": "website test",
+    "bodyPart1": "Hello \n\nthis is vinay\n\nand Vinay did this",
+    "bodyFooter": "Thanks & Regards\nVinay",
+    "fontFamily": "Times New Roman",
+    "ccAddress": "",
+    "bccAddress": "",
+    "attachmentNames": [
+      "Placement Report2024.pdf",
+      "brochure_1720443627 (1).pdf"
+    ],
+    "createdAt": "2025-06-01T12:35:48.035Z"
+  },
+  {
+    "id": "m94425748mbdnimpl",
+    "userId": "ett2iz4u7mbdmjz77",
+    "name": "test 2",
+    "subject": "website test no 2",
+    "bodyPart1": "Hello \n\nthis is vinay\n\nand Vinay did this",
+    "bodyFooter": "Thanks & Regards\nVinay",
+    "fontFamily": "Times New Roman",
+    "ccAddress": "",
+    "bccAddress": "",
+    "attachmentNames": [
+      "brochure_1720443627 (1).pdf"
+    ],
+    "createdAt": "2025-06-01T12:42:56.505Z"
+  },
+  {
+    "id": "knuzm5v8mmbdp7p4n",
+    "userId": "uiohj217cmbdmgcde",
+    "name": "test",
+    "subject": "testmail",
+    "bodyPart1": "hello\n\nThis is just test mail",
+    "bodyFooter": "Thanks\nVinay",
+    "fontFamily": "Times New Roman",
+    "ccAddress": "",
+    "bccAddress": "",
+    "attachmentNames": [],
+    "createdAt": "2025-06-01T13:30:25.655Z"
+  }
+]

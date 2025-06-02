@@ -1,0 +1,758 @@
+import customtkinter as ctk
+import tkinter.filedialog as filedialog
+import tkinter.messagebox as messagebox
+import pandas as pd
+import smtplib
+import ssl
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.image import MIMEImage
+from email.mime.base import MIMEBase
+from email import encoders
+import threading
+import os
+import re
+import json
+from tkinter import ttk  # For Combobox
+import datetime
+import time
+
+TEMPLATE_FILE = "email_templates.json"
+SCHEDULED_EMAILS_FILE = "scheduled_emails.json"
+
+class EmailApp(ctk.CTk):
+    def __init__(self):
+        super().__init__()
+
+        self.title("Mass Email Sender")
+        self.geometry("1050x900") # Increased height
+        self.configure(padx=15, pady=15)
+
+        self.email_address = ctk.StringVar()
+        self.password = ctk.StringVar()
+        self.excel_file_path = ctk.StringVar()
+        self.excel_sheet_name = ctk.StringVar(value="Sheet1")
+        self.email_column_name = ctk.StringVar(value="ContactEmail")
+        self.subject = ctk.StringVar()
+        self.cc_address = ctk.StringVar()
+        self.bcc_address = ctk.StringVar()
+        self.bcc_cc_count = ctk.IntVar(value=0)
+        self.bcc_cc_option = ctk.StringVar(value="BCC")
+        self.attachments = []
+        self.attachment_list_var = ctk.StringVar(value="")
+        self.image_path_var = ctk.StringVar()
+        self.valid_recipient_count = ctk.IntVar(value=0)
+        self.invalid_recipient_count = ctk.IntVar(value=0)
+        self.address_not_found_count = ctk.IntVar(value=0)
+        self.recipient_list = []
+        self.invalid_recipient_list = []
+        self.address_not_found_list = []
+        self.sent_count = ctk.IntVar(value=0)
+        self.font_family = ctk.StringVar(value="Times New Roman")
+        self.templates = self.load_templates()
+        self.template_name = ctk.StringVar()
+        self.scheduled_emails = self.load_scheduled_emails()
+        self.scheduling_thread = threading.Thread(target=self._check_scheduled_emails, daemon=True)
+        self.scheduling_thread.start()
+        self.schedule_datetime = None
+
+        self.create_widgets()
+
+    def create_widgets(self):
+        # Title Label
+        title_label = ctk.CTkLabel(self, text="Mass Email Sender", font=ctk.CTkFont(size=24, weight="bold"))
+        title_label.grid(row=0, column=0, columnspan=3, pady=(0, 20), sticky="ew")
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_columnconfigure(1, weight=1)
+        self.grid_columnconfigure(2, weight=1)
+
+        # Left Frame for config inputs
+        config_frame = ctk.CTkFrame(self)
+        config_frame.grid(row=1, column=0, sticky="nsew", padx=(10, 15), pady=(0, 10))
+        config_frame.grid_columnconfigure(1, weight=1)
+        config_frame.grid_columnconfigure(3, weight=1)
+
+        # Email Address
+        ctk.CTkLabel(config_frame, text="Email Address:").grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.email_entry = ctk.CTkEntry(config_frame, textvariable=self.email_address, width=300)
+        self.email_entry.grid(row=0, column=1, columnspan=3, sticky="ew", pady=5)
+
+        # Password
+        ctk.CTkLabel(config_frame, text="Password:").grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.password_entry = ctk.CTkEntry(config_frame, textvariable=self.password, show="*", width=300)
+        self.password_entry.grid(row=1, column=1, columnspan=3, sticky="ew", pady=5)
+
+        # Excel File
+        ctk.CTkLabel(config_frame, text="Excel File:").grid(row=2, column=0, sticky="w", pady=5, padx=5)
+        self.excel_entry = ctk.CTkEntry(config_frame, textvariable=self.excel_file_path, width=220, state="readonly")
+        self.excel_entry.grid(row=2, column=1, sticky="ew", pady=5)
+        ctk.CTkButton(config_frame, text="Select File", command=self.select_excel_file, width=80).grid(row=2, column=2, padx=5, pady=5)
+        ctk.CTkButton(config_frame, text="Import", command=self._protected_import_emails, width=80).grid(row=2, column=3, padx=5, pady=5)
+
+        # Sheet Name
+        ctk.CTkLabel(config_frame, text="Sheet Name:").grid(row=3, column=0, sticky="w", pady=5, padx=5)
+        self.sheet_entry = ctk.CTkEntry(config_frame, textvariable=self.excel_sheet_name, width=300)
+        self.sheet_entry.grid(row=3, column=1, columnspan=3, sticky="ew", pady=5)
+
+        # Email Column
+        ctk.CTkLabel(config_frame, text="Email Column:").grid(row=4, column=0, sticky="w", pady=5, padx=5)
+        self.column_entry = ctk.CTkEntry(config_frame, textvariable=self.email_column_name, width=300)
+        self.column_entry.grid(row=4, column=1, columnspan=3, sticky="ew", pady=5)
+
+        # Subject
+        ctk.CTkLabel(config_frame, text="Subject:").grid(row=5, column=0, sticky="w", pady=5, padx=5)
+        self.subject_entry = ctk.CTkEntry(config_frame, textvariable=self.subject, width=300)
+        self.subject_entry.grid(row=5, column=1, columnspan=3, sticky="ew", pady=5)
+
+        # CC Address (Optional - for single CC)
+        ctk.CTkLabel(config_frame, text="CC Address (Optional):").grid(row=6, column=0, sticky="w", pady=5, padx=5)
+        self.cc_entry = ctk.CTkEntry(config_frame, textvariable=self.cc_address, width=300)
+        self.cc_entry.grid(row=6, column=1, columnspan=3, sticky="ew", pady=5)
+
+        # BCC Address (Optional - for single BCC)
+        ctk.CTkLabel(config_frame, text="BCC Address (Optional):").grid(row=7, column=0, sticky="w", pady=5, padx=5)
+        self.bcc_entry = ctk.CTkEntry(config_frame, textvariable=self.bcc_address, width=300)
+        self.bcc_entry.grid(row=7, column=1, columnspan=3, sticky="ew", pady=5)
+
+        # BCC/CC Count and Option
+        ctk.CTkLabel(config_frame, text="Add Multiple BCC/CC:").grid(row=8, column=0, sticky="w", pady=5, padx=5)
+        vcmd = (self.register(self._validate_bcc_cc_count), '%P')
+        self.bcc_cc_entry = ctk.CTkEntry(config_frame, textvariable=self.bcc_cc_count, width=80,
+                                         validate='key', validatecommand=vcmd)
+        self.bcc_cc_entry.grid(row=8, column=1, sticky="w", pady=5)
+        bcc_cc_option_menu = ctk.CTkOptionMenu(config_frame, values=["BCC", "CC"], variable=self.bcc_cc_option, width=100)
+        bcc_cc_option_menu.grid(row=8, column=2, sticky="w", padx=5, pady=5)
+        ctk.CTkLabel(config_frame, text="recipients per email").grid(row=8, column=3, sticky="w", pady=5, padx=5)
+
+        # Font Family Selection
+        ctk.CTkLabel(config_frame, text="Font Family:").grid(row=9, column=0, sticky="w", pady=5, padx=5)
+        font_choices = ["Arial", "Times New Roman", "Courier New", "Verdana", "Georgia"]
+        font_dropdown = ctk.CTkComboBox(config_frame, values=font_choices, variable=self.font_family, width=300)
+        font_dropdown.grid(row=9, column=1, columnspan=3, sticky="ew", pady=5)
+
+        # Email Template Section
+        template_frame = ctk.CTkFrame(self)
+        template_frame.grid(row=2, column=0, sticky="ew", padx=(10, 15), pady=(10, 10))
+        template_frame.grid_columnconfigure(1, weight=1)
+
+        ctk.CTkLabel(template_frame, text="Email Templates:").grid(row=0, column=0, sticky="w", pady=5, padx=5)
+        self.template_combo = ttk.Combobox(template_frame, textvariable=self.template_name, values=list(self.templates.keys()))
+        self.template_combo.grid(row=0, column=1, sticky="ew", pady=5, padx=5)
+        self.template_combo.bind("<<ComboboxSelected>>", self.load_template_data)
+        ctk.CTkButton(template_frame, text="Save Template", command=self.save_template, width=120).grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        ctk.CTkEntry(template_frame, textvariable=self.template_name, placeholder_text="Template Name", width=280).grid(row=1, column=1, sticky="ew", pady=5, padx=5)
+
+        # First Part of Body
+        ctk.CTkLabel(config_frame, text="First Part of Body:").grid(row=11, column=0, sticky="nw", pady=5, padx=5)
+        self.body_part1_text_area = ctk.CTkTextbox(config_frame, width=450, height=100)
+        self.body_part1_text_area.grid(row=11, column=1, columnspan=3, pady=5, sticky="ew")
+
+        # Image selection
+        ctk.CTkLabel(config_frame, text="Image:").grid(row=12, column=0, sticky="w", pady=5, padx=5)
+        self.image_entry = ctk.CTkEntry(config_frame, textvariable=self.image_path_var, width=220, state="readonly")
+        self.image_entry.grid(row=12, column=1, sticky="ew", pady=5)
+        ctk.CTkButton(config_frame, text="Select Image", command=self.select_image_file, width=80).grid(row=12, column=2, padx=5, pady=5)
+
+        # Third Part of Body (footer)
+        ctk.CTkLabel(config_frame, text="Third Part of Body (with footer):").grid(row=13, column=0, sticky="nw", pady=5, padx=5)
+        self.body_part3_text_area = ctk.CTkTextbox(config_frame, width=450, height=100, padx=5, pady=5)
+        self.body_part3_text_area.grid(row=13, column=1, columnspan=3, padx=10, pady=10, sticky="ew")
+
+        # Attachments (Placed below config_frame)
+        ctk.CTkLabel(self, text="Attachments:").grid(row=3, column=1, sticky="w", pady=(10, 5), padx=5)
+        attachment_entry = ctk.CTkEntry(self, textvariable=self.attachment_list_var, state="readonly", width=250)
+        attachment_entry.grid(row=4, column=1, sticky="ew", pady=5, padx=5)
+        ctk.CTkButton(self, text="Add Attachment", command=self.add_attachment, width=120).grid(row=4, column=2, sticky="w", padx=5, pady=5)
+        ctk.CTkButton(self, text="Clear Attachments", command=self.clear_attachments, width=120).grid(row=4, column=3, sticky="w", padx=5, pady=5)
+
+        # Right Frame for actions and console
+        right_frame = ctk.CTkFrame(self)
+        right_frame.grid(row=1, column=1, rowspan=5, sticky="nsew", padx=(0, 15), pady=(0, 10))
+        right_frame.grid_columnconfigure(0, weight=1)
+        right_frame.grid_rowconfigure(9, weight=1)
+
+        self.send_button = ctk.CTkButton(right_frame, text="Send Emails Now", command=self._protected_send_emails, width=200)
+        self.send_button.grid(row=0, column=0, pady=(15, 10), sticky="ew")
+
+        # Scheduling Section in Right Frame
+        schedule_frame = ctk.CTkFrame(right_frame)
+        schedule_frame.grid(row=1, column=0, pady=(10, 10), sticky="ew")
+        ctk.CTkLabel(schedule_frame, text="Schedule Email:").grid(row=0, column=0, columnspan=2, sticky="w", pady=5, padx=5)
+
+        ctk.CTkLabel(schedule_frame, text="Date (YYYY-MM-DD):").grid(row=1, column=0, sticky="w", pady=5, padx=5)
+        self.schedule_date_picker = ctk.CTkEntry(schedule_frame, placeholder_text="YYYY-MM-DD", width=150)
+        self.schedule_date_picker.grid(row=2, column=0, sticky="w", pady=5, padx=5)
+
+        ctk.CTkLabel(schedule_frame, text="Time (HH:MM):").grid(row=1, column=1, sticky="w", pady=5, padx=5)
+        self.schedule_time_picker = ctk.CTkEntry(schedule_frame, placeholder_text="HH:MM", width=100)
+        self.schedule_time_picker.grid(row=2, column=1, sticky="w", pady=5, padx=5)
+
+        ctk.CTkButton(schedule_frame, text="Schedule", command=self.schedule_email, width=150).grid(row=3, column=0, columnspan=2, sticky="ew", pady=10, padx=5)
+
+        self.imported_count_label = ctk.CTkLabel(right_frame, text="Valid emails imported: 0", anchor="w")
+        self.imported_count_label.grid(row=3, column=0, pady=(15, 5), sticky="ew")
+
+        self.invalid_count_label = ctk.CTkLabel(right_frame, text="Invalid emails found: 0", anchor="w")
+        self.invalid_count_label.grid(row=4, column=0, pady=(0, 5), sticky="ew")
+
+        self.address_not_found_label = ctk.CTkLabel(right_frame, text="Address not found: 0", anchor="w")
+        self.address_not_found_label.grid(row=5, column=0, pady=(0, 5), sticky="ew")
+
+        self.sent_label = ctk.CTkLabel(right_frame, text="Emails sent: 0", anchor="w")
+        self.sent_label.grid(row=6, column=0, pady=(0, 5), sticky="ew")
+
+        console_label = ctk.CTkLabel(right_frame, text="Console:", anchor="w")
+        console_label.grid(row=7, column=0, sticky="ew", pady=(10, 0))
+
+        self.console_text = ctk.CTkTextbox(right_frame, height=15, state="disabled")
+        self.console_text.grid(row=8, column=0, sticky="nsew", pady=(0, 15))
+
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_rowconfigure(2, weight=0) # For template frame
+
+    def _validate_bcc_cc_count(self, new_value):
+        if not new_value:
+            self.bcc_cc_count.set(0)
+            return True
+        try:
+            int(new_value)
+            return True
+        except ValueError:
+            return False
+
+    def _protected_import_emails(self):
+        try:
+            self.import_emails()
+        except Exception as e:
+            messagebox.showerror("Unexpected Error", f"An unexpected error occurred during import: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def _protected_send_emails(self):
+        if not self.recipient_list:
+            messagebox.showerror("Error", "Please import emails first.")
+            return
+        try:
+            bcc_cc_count_str = self.bcc_cc_entry.get()
+            bcc_cc_option = self.bcc_cc_option.get()
+            try:
+                bcc_cc_count = int(bcc_cc_count_str)
+            except ValueError:
+                messagebox.showerror("Input Error", "Please enter a valid number for 'Add Multiple BCC/CC'.")
+                return
+            self.start_send_thread(bcc_cc_count, bcc_cc_option)
+        except Exception as e:
+            messagebox.showerror("Unexpected Error", f"An unexpected error occurred during send initiation: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def is_valid_email(self, email):
+        email_regex = r"^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}$"
+        return re.match(email_regex, email)
+
+    def select_excel_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Excel File",
+            filetypes=[("Excel files", "*.xlsx"), ("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.excel_file_path.set(file_path)
+
+    def select_image_file(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Image File",
+            filetypes=[("Image files", "*.png;*.jpg;*.jpeg;*.gif"), ("All files", "*.*")]
+        )
+        if file_path:
+            self.image_path_var.set(file_path)
+
+    def add_attachment(self):
+        file_path = filedialog.askopenfilename(
+            title="Select Attachment",
+            filetypes=[("All files", "*.*")]
+        )
+        if file_path and file_path not in self.attachments:
+            self.attachments.append(file_path)
+            self.attachment_list_var.set(", ".join(self.attachments))
+
+    def clear_attachments(self):
+        self.attachments = []
+        self.attachment_list_var.set("")
+
+    def import_emails(self):
+        excel_path = self.excel_file_path.get()
+        sheet_name = self.excel_sheet_name.get()
+        email_column = self.email_column_name.get()
+
+        if not excel_path:
+            messagebox.showerror("Error", "Please select an Excel file.")
+            return
+
+        try:
+            df = pd.read_excel(excel_path, sheet_name=sheet_name)
+            if email_column not in df.columns:
+                messagebox.showerror("Error", f"Column '{email_column}' not found in the Excel file.")
+                return
+
+            all_emails = df[email_column].astype(str).tolist()
+            self.recipient_list = []
+            self.invalid_recipient_list = []
+
+            for email in all_emails:
+                cleaned_email = email.strip().lower()
+                if pd.notna(cleaned_email) and cleaned_email and cleaned_email != "nan":
+                    if self.is_valid_email(cleaned_email):
+                        self.recipient_list.append(cleaned_email)
+                    else:
+                        self.invalid_recipient_list.append(cleaned_email)
+
+            self.valid_recipient_count.set(len(self.recipient_list))
+            self.invalid_recipient_count.set(len(self.invalid_recipient_list))
+            self.address_not_found_count.set(0)
+            self.sent_count.set(0)
+
+            self.imported_count_label.configure(text=f"Valid emails imported: {self.valid_recipient_count.get()}")
+            self.invalid_count_label.configure(text=f"Invalid emails found: {self.invalid_recipient_count.get()}")
+            self.address_not_found_label.configure(text=f"Address not found: {self.address_not_found_count.get()}")
+            self.sent_label.configure(text=f"Emails sent: {self.sent_count.get()}")
+
+            messagebox.showinfo("Import Status", f"{self.valid_recipient_count.get()} valid emails imported.\n{self.invalid_recipient_count.get()} invalid emails found.")
+
+        except FileNotFoundError:
+            messagebox.showerror("Error", f"File not found: {excel_path}")
+        except Exception as e:
+            messagebox.showerror("Error", f"Error during import: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def start_send_thread(self, bcc_cc_count, bcc_cc_option):
+        if not self.recipient_list:
+            messagebox.showerror("Error", "No valid emails imported to send.")
+            return
+        self.send_button.configure(state="disabled")
+        threading.Thread(target=self._send_emails, args=(bcc_cc_count, bcc_cc_option), daemon=True).start()
+
+    def _send_emails(self, bcc_cc_count, bcc_cc_option):
+        sender_email = self.email_address.get()
+        sender_password = self.password.get()
+        subject = self.subject.get()
+        body_part1 = self.body_part1_text_area.get("0.0", "end").strip()
+        image_path = self.image_path_var.get()
+        body_part3 = self.body_part3_text_area.get("0.0", "end").strip()
+        font_family = self.font_family.get()
+        cc_address = self.cc_entry.get().strip()
+        bcc_address = self.bcc_entry.get().strip()
+
+        port = 465  # For SSL
+        context = ssl.create_default_context()
+
+        self.console_text.configure(state="normal")
+        self.console_text.delete("0.0", "end")
+        self.console_text.configure(state="disabled")
+
+        address_not_found = 0
+        sent_count = 0
+        total_recipients = len(self.recipient_list)
+
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", port, context=context) as server:
+                server.login(sender_email, sender_password)
+                self.update_console("Logged in to Gmail successfully.")
+
+                for i in range(0, total_recipients, bcc_cc_count if bcc_cc_count > 0 else 1):
+                    batch_recipients = self.recipient_list[i:i + bcc_cc_count if bcc_cc_count > 0 else i + 1]
+
+                    if not batch_recipients:
+                        break
+
+                    message = MIMEMultipart("related")
+                    message["From"] = sender_email
+                    message["Subject"] = subject
+
+                    if cc_address:
+                        message["Cc"] = cc_address
+                    if bcc_address and bcc_cc_option != "BCC": # Add single BCC if not using multiple BCC
+                        message["Bcc"] = bcc_address
+
+                    html_body = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body {{
+                                font-family: '{font_family}', serif;
+                            }}
+                        </style>
+                        </head>
+                        <body>
+                            <pre>{body_part1}</pre>
+                            {f'<img src="cid:myimage" alt="Embedded Image">' if os.path.exists(image_path) else ''}
+                            <pre>{body_part3}</pre>
+                        </body>
+                        </html>
+                        """
+                    message.attach(MIMEText(html_body, "html"))
+
+                    if os.path.exists(image_path):
+                        try:
+                            with open(image_path, 'rb') as img_file:
+                                img = MIMEImage(img_file.read(), name=os.path.basename(image_path))
+                                img.add_header('Content-ID', '<myimage>')
+                                img.add_header('Content-Disposition', 'inline', filename=os.path.basename(image_path))
+                                message.attach(img)
+                        except Exception as e:
+                            self.update_console(f"Error attaching image: {e}")
+
+                    # Attach additional files
+                    for filepath in self.attachments:
+                        if os.path.exists(filepath):
+                            try:
+                                with open(filepath, "rb") as attachment_file:
+                                    part = MIMEBase("application", "octet-stream")
+                                    part.set_payload(attachment_file.read())
+                                encoders.encode_base64(part)
+                                part.add_header(
+                                    "Content-Disposition",
+                                    f"attachment; filename={os.path.basename(filepath)}",
+                                )
+                                message.attach(part)
+                            except Exception as e:
+                                self.update_console(f"Error attaching file {os.path.basename(filepath)}: {e}")
+
+                    recipients_to_send = []
+                    if bcc_cc_option == "BCC" and bcc_cc_count > 0:
+                        recipients_to_send.extend(batch_recipients)
+                        if cc_address:
+                            recipients_to_send.append(cc_address)
+                        if bcc_address: # Single BCC still added if multiple BCC is used
+                            recipients_to_send.append(bcc_address)
+                        message["To"] = sender_email # Sending to self when using BCC for multiple
+                    else:
+                        recipients_to_send.extend(batch_recipients)
+                        if cc_address and batch_recipients:
+                            message["Cc"] = ", ".join([cc_address] + batch_recipients)
+                        elif cc_address:
+                            message["Cc"] = cc_address
+                        if bcc_address:
+                            recipients_to_send.append(bcc_address)
+
+                        message["To"] = ", ".join(batch_recipients)
+
+
+                    try:
+                        server.sendmail(sender_email, recipients_to_send, message.as_string())
+                        self.update_console(f"Email sent to batch ({len(batch_recipients)} recipients) - Emails sent: {sent_count + 1}/{total_recipients // (bcc_cc_count if bcc_cc_count > 0 else 1) + (1 if total_recipients % (bcc_cc_count if bcc_cc_count > 0 else 1) != 0 else 0)}")
+                        sent_count += 1
+                    except smtplib.SMTPRecipientsRefused as e:
+                        for recipient, error in e.recipients.items():
+                            error_code, error_message = error
+                            self.update_console(f"Delivery failed for {recipient}: {error_code} - {error_message.decode()}")
+                            if error_code == 550 and b"address not found" in error_message.lower():
+                                address_not_found += 1
+                    except smtplib.SMTPHeloError as e:
+                        self.update_console(f"Delivery failed: Server refused HELO - {e}")
+                    except smtplib.SMTPSenderRefused as e:
+                        self.update_console(f"Delivery failed: Sender address refused - {e}")
+                    except smtplib.SMTPDataError as e:
+                        self.update_console(f"Delivery failed: Data refused - {e}")
+                    except smtplib.SMTPConnectError as e:
+                        self.update_console(f"Delivery failed: Could not connect to server - {e}")
+                    except Exception as send_err:
+                        self.update_console(f"Failed to send email batch: {send_err}")
+
+                self.update_console("All emails processed.")
+                messagebox.showinfo("Done", f"Sent {total_recipients} emails in {sent_count} batches. Address not found: {address_not_found} (check console for other failures).")
+                self.address_not_found_count.set(address_not_found)
+                self.sent_count.set(sent_count)
+                self.address_not_found_label.configure(text=f"Address not found: {self.address_not_found_count.get()}")
+                self.sent_label.configure(text=f"Emails sent: {self.sent_count.get()}")
+
+        except smtplib.SMTPAuthenticationError:
+            messagebox.showerror("Authentication Error", "Failed to login. Check email and password.")
+        except Exception as e:
+            messagebox.showerror("Error", f"An error occurred during sending: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.send_button.configure(state="normal")
+
+    def update_console(self, text):
+        self.console_text.configure(state="normal")
+        self.console_text.insert("end", text + "\n")
+        self.console_text.see("end")
+        self.console_text.configure(state="disabled")
+
+    def load_templates(self):
+        try:
+            with open(TEMPLATE_FILE, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+        except json.JSONDecodeError:
+            messagebox.showerror("Error", "Error decoding email templates file.")
+            return {}
+
+    def save_template(self):
+        template_name = self.template_name.get().strip()
+        if not template_name:
+            messagebox.showerror("Error", "Please enter a name for the template.")
+            return
+
+        template_data = {
+            "subject": self.subject.get(),
+            "body_part1": self.body_part1_text_area.get("0.0", "end").strip(),
+            "body_part3": self.body_part3_text_area.get("0.0", "end").strip(),
+            "font_family": self.font_family.get(),
+            "cc_address": self.cc_address.get().strip(),
+            "bcc_address": self.bcc_address.get().strip(),
+            "attachments": self.attachments[:] # Save a copy
+        }
+        self.templates[template_name] = template_data
+        self.save_templates_to_file()
+        self.update_template_dropdown()
+        messagebox.showinfo("Success", f"Template '{template_name}' saved successfully.")
+        self.template_name.set("") # Clear the entry after saving
+
+    def save_templates_to_file(self):
+        try:
+            with open(TEMPLATE_FILE, 'w') as f:
+                json.dump(self.templates, f, indent=4)
+        except Exception as e:
+            messagebox.showerror("Error", f"Error saving email templates: {e}")
+
+    def update_template_dropdown(self):
+        template_names = list(self.templates.keys())
+        self.template_combo['values'] = template_names
+
+    def load_template_data(self, event=None):
+        selected_template = self.template_name.get()
+        if selected_template in self.templates:
+            data = self.templates[selected_template]
+            self.subject.set(data.get("subject", ""))
+            self.body_part1_text_area.delete("0.0", "end")
+            self.body_part1_text_area.insert("0.0", data.get("body_part1", ""))
+            self.body_part3_text_area.delete("0.0", "end")
+            self.body_part3_text_area.insert("0.0", data.get("body_part3", ""))
+            self.font_family.set(data.get("font_family", "Times New Roman"))
+            self.cc_address.set(data.get("cc_address", ""))
+            self.bcc_address.set(data.get("bcc_address", ""))
+            self.attachments = data.get("attachments", [])
+            self.attachment_list_var.set(", ".join(self.attachments))
+
+    def load_scheduled_emails(self):
+        try:
+            with open(SCHEDULED_EMAILS_FILE, 'r') as f:
+                return json.load(f)
+        except FileNotFoundError:
+            return {}
+        except json.JSONDecodeError:
+            messagebox.showerror("Error", "Error decoding scheduled emails file.")
+            return {}
+
+    def save_scheduled_emails(self):
+        try:
+            with open(SCHEDULED_EMAILS_FILE, 'w') as f:
+                json.dump(self.scheduled_emails, f, indent=4)
+        except Exception as e:
+            messagebox.showerror("Error", f"Error saving scheduled emails: {e}")
+
+    def schedule_email(self):
+        if not self.recipient_list:
+            messagebox.showerror("Error", "Please import emails before scheduling.")
+            return
+
+        schedule_date_str = self.schedule_date_picker.get()
+        schedule_time_str = self.schedule_time_picker.get()
+
+        try:
+            schedule_datetime = datetime.datetime.strptime(f"{schedule_date_str} {schedule_time_str}", "%Y-%m-%d %H:%M")
+            if schedule_datetime <= datetime.datetime.now():
+                messagebox.showerror("Error", "Scheduled time must be in the future.")
+                return
+        except ValueError:
+            messagebox.showerror("Error", "Invalid date or time format (YYYY-MM-DD HH:MM).")
+            return
+
+        bcc_cc_count_str = self.bcc_cc_entry.get()
+        bcc_cc_option = self.bcc_cc_option.get()
+        try:
+            bcc_cc_count = int(bcc_cc_count_str)
+        except ValueError:
+            messagebox.showerror("Input Error", "Please enter a valid number for 'Add Multiple BCC/CC'.")
+            return
+
+        scheduled_data = {
+            "recipients": self.recipient_list[:], # Save a copy
+            "sender_email": self.email_address.get(),
+            "sender_password": self.password.get(),
+            "subject": self.subject.get(),
+            "body_part1": self.body_part1_text_area.get("0.0", "end").strip(),
+            "image_path": self.image_path_var.get(),
+            "body_part3": self.body_part3_text_area.get("0.0", "end").strip(),
+            "font_family": self.font_family.get(),
+            "cc_address": self.cc_address.get().strip(),
+            "bcc_address": self.bcc_address.get().strip(),
+            "attachments": self.attachments[:],
+            "bcc_cc_count": bcc_cc_count,
+            "bcc_cc_option": bcc_cc_option,
+            "schedule_time": schedule_datetime.isoformat(),
+            "status": "pending"
+        }
+
+        timestamp = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+        self.scheduled_emails[f"scheduled_{timestamp}"] = scheduled_data
+        self.save_scheduled_emails()
+        messagebox.showinfo("Success", f"Email scheduled for {schedule_datetime.strftime('%Y-%m-%d %H:%M')}.")
+
+    def _check_scheduled_emails(self):
+        while True:
+            now = datetime.datetime.now()
+            emails_to_send = [item for item in self.scheduled_emails.items() if item[1]['status'] == 'pending']
+
+            for key, data in emails_to_send:
+                schedule_time = datetime.datetime.fromisoformat(data['schedule_time'])
+                if schedule_time <= now:
+                    self._send_scheduled_email(key, data)
+
+            time.sleep(60) # Check every minute
+
+    def _send_scheduled_email(self, schedule_id, data):
+        sender_email = data['sender_email']
+        sender_password = data['sender_password']
+        recipients = data['recipients']
+        subject = data['subject']
+        body_part1 = data['body_part1']
+        image_path = data['image_path']
+        body_part3 = data['body_part3']
+        font_family = data['font_family']
+        cc_address = data['cc_address']
+        bcc_address = data['bcc_address']
+        attachments = data['attachments']
+        bcc_cc_count = data['bcc_cc_count']
+        bcc_cc_option = data['bcc_cc_option']
+
+        port = 465  # For SSL
+        context = ssl.create_default_context()
+
+        try:
+            with smtplib.SMTP_SSL("smtp.gmail.com", port, context=context) as server:
+                server.login(sender_email, sender_password)
+                self.update_console(f"Sending scheduled email (ID: {schedule_id})...")
+
+                total_recipients = len(recipients)
+                sent_count = 0
+                address_not_found = 0
+
+                for i in range(0, total_recipients, bcc_cc_count if bcc_cc_count > 0 else 1):
+                    batch_recipients = recipients[i:i + bcc_cc_count if bcc_cc_count > 0 else i + 1]
+                    if not batch_recipients:
+                        break
+
+                    message = MIMEMultipart("related")
+                    message["From"] = sender_email
+                    message["Subject"] = subject
+
+                    if cc_address:
+                        message["Cc"] = cc_address
+                    if bcc_address and bcc_cc_option != "BCC":
+                        message["Bcc"] = bcc_address
+
+                    html_body = f"""
+                        <!DOCTYPE html>
+                        <html>
+                        <head>
+                        <meta charset="UTF-8">
+                        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+                        <style>
+                            body {{
+                                font-family: '{font_family}', serif;
+                            }}
+                        </style>
+                        </head>
+                        <body>
+                            <pre>{body_part1}</pre>
+                            {f'<img src="cid:myimage" alt="Embedded Image">' if os.path.exists(image_path) else ''}
+                            <pre>{body_part3}</pre>
+                        </body>
+                        </html>
+                        """
+                    message.attach(MIMEText(html_body, "html"))
+
+                    if os.path.exists(image_path):
+                        try:
+                            with open(image_path, 'rb') as img_file:
+                                img = MIMEImage(img_file.read(), name=os.path.basename(image_path))
+                                img.add_header('Content-ID', '<myimage>')
+                                img.add_header('Content-Disposition', 'inline', filename=os.path.basename(image_path))
+                                message.attach(img)
+                        except Exception as e:
+                            self.update_console(f"Error attaching image for scheduled email: {e}")
+
+                    for filepath in attachments:
+                        if os.path.exists(filepath):
+                            try:
+                                with open(filepath, "rb") as attachment_file:
+                                    part = MIMEBase("application", "octet-stream")
+                                    part.set_payload(attachment_file.read())
+                                    encoders.encode_base64(part)
+                                    part.add_header(
+                                        "Content-Disposition",
+                                        f"attachment; filename={os.path.basename(filepath)}",
+                                    )
+                                    message.attach(part)
+                            except Exception as e:
+                                self.update_console(f"Error attaching file for scheduled email {os.path.basename(filepath)}: {e}")
+
+                    recipients_to_send = []
+                    if bcc_cc_option == "BCC" and bcc_cc_count > 0:
+                        recipients_to_send.extend(batch_recipients)
+                        if cc_address:
+                            recipients_to_send.append(cc_address)
+                        if bcc_address:
+                            recipients_to_send.append(bcc_address)
+                        message["To"] = sender_email
+                    else:
+                        recipients_to_send.extend(batch_recipients)
+                        if cc_address and batch_recipients:
+                            message["Cc"] = ", ".join([cc_address] + batch_recipients)
+                        elif cc_address:
+                            message["Cc"] = cc_address
+                        if bcc_address:
+                            recipients_to_send.append(bcc_address)
+                        message["To"] = ", ".join(batch_recipients)
+
+                    try:
+                        server.sendmail(sender_email, recipients_to_send, message.as_string())
+                        self.update_console(f"Scheduled email (ID: {schedule_id}) sent to batch ({len(batch_recipients)} recipients).")
+                        sent_count += 1
+                    except smtplib.SMTPRecipientsRefused as e:
+                        for recipient, error in e.recipients.items():
+                            error_code, error_message = error
+                            self.update_console(f"Scheduled delivery failed for {recipient} (ID: {schedule_id}): {error_code} - {error_message.decode()}")
+                            if error_code == 550 and b"address not found" in error_message.lower():
+                                address_not_found += 1
+                    except Exception as send_err:
+                        self.update_console(f"Failed to send scheduled email batch (ID: {schedule_id}): {send_err}")
+
+                self.update_scheduled_email_status(schedule_id, "sent")
+                self.update_console(f"Scheduled email (ID: {schedule_id}) processing complete. Sent {total_recipients} emails in {sent_count} batches. Address not found: {address_not_found}.")
+
+        except smtplib.SMTPAuthenticationError:
+            self.update_scheduled_email_status(schedule_id, "failed: auth error")
+            self.update_console(f"Scheduled email (ID: {schedule_id}) failed: Authentication Error - Check email and password.")
+        except Exception as e:
+            self.update_scheduled_email_status(schedule_id, f"failed: {e}")
+            self.update_console(f"Scheduled email (ID: {schedule_id}) failed: {e}")
+            import traceback
+            traceback.print_exc()
+
+    def update_scheduled_email_status(self, schedule_id, new_status):
+        if schedule_id in self.scheduled_emails:
+            self.scheduled_emails[schedule_id]['status'] = new_status
+            self.save_scheduled_emails()
+
+if __name__ == "__main__":
+    app = EmailApp()
+    app.mainloop()
